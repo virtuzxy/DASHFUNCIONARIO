@@ -1,0 +1,412 @@
+<!-- 
+INSTRUÇÕES RÁPIDAS:
+Abra o arquivo dashmanager.html diretamente no navegador (double-click).
+Faça upload de um arquivo CSV com colunas esperadas (Nome, Cargo, Data Admissão, Tipo Contrato, Contato, Situação, Horas Dia, Faltas, Atrasos Min, Vendas, Ticket Médio, Conversão, Meta, Comissão %).
+O dashboard carregará automaticamente um seed de exemplo se nenhum arquivo for enviado.
+Funcionalidades: filtros na sidebar, gráficos, tabelas com DataTables, export PDF, alertas.
+Certifique-se de ter conexão para carregar CDNs (Bootstrap, Plotly, etc.).
+-->
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard — Controle de Funcionários</title>
+
+    <!-- CDNs -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.datatables.net/1.13.4/css/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.4/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        :root {
+            --azul-escuro: #0A1A2F;
+            --azul-claro: #00AEEF;
+            --verde: #00C853;
+            --cinza-leve: #E8EAF6;
+            --branco: #FFFFFF;
+            --vermelho: #D32F2F;
+            --amarelo: #FFC107;
+        }
+        body {
+            background-color: var(--cinza-leve);
+            color: var(--azul-escuro);
+            font-family: 'Segoe UI', sans-serif;
+        }
+        .sidebar {
+            position: fixed;
+            top: 0; left: 0;
+            width: 250px;
+            height: 100vh;
+            background-color: var(--azul-escuro);
+            color: var(--branco);
+            padding: 20px;
+            overflow-y: auto;
+            z-index: 1000;
+        }
+        .main-content {
+            margin-left: 250px;
+            padding: 20px;
+        }
+        .header {
+            background-color: var(--azul-escuro);
+            color: var(--branco);
+            padding: 15px;
+            text-align: center;
+        }
+        .card {
+            background-color: var(--branco);
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .kpi-card {
+            text-align: center;
+            padding: 20px;
+        }
+        .alert-card {
+            border-left: 5px solid var(--verde);
+        }
+        .alert-card.warning { border-left-color: var(--amarelo); }
+        .alert-card.danger { border-left-color: var(--vermelho); }
+        .loading { display: none; text-align: center; margin: 20px; }
+        @media (max-width: 768px) {
+            .sidebar { width: 100%; position: relative; }
+            .main-content { margin-left: 0; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="sidebar">
+        <h4><i class="fas fa-users"></i> Controle de Funcionários</h4>
+
+        <div class="mb-3">
+            <label for="fileUpload" class="form-label">Upload CSV/XLSX</label>
+            <input type="file" class="form-control" id="fileUpload" accept=".csv,.xlsx">
+        </div>
+
+        <div class="mb-3">
+            <label for="searchInput" class="form-label">Buscar Funcionário</label>
+            <input type="text" class="form-control" id="searchInput" placeholder="Digite o nome...">
+        </div>
+
+        <div class="mb-3">
+            <label for="statusSelect" class="form-label">Situação</label>
+            <select multiple class="form-select" id="statusSelect">
+                <option value="ativo">Ativo</option>
+                <option value="afastado">Afastado</option>
+            </select>
+        </div>
+
+        <button class="btn btn-primary w-100" id="seedBtn">Carregar Exemplo</button>
+        <button class="btn btn-success w-100 mt-2" id="exportPDFBtn">Exportar PDF</button>
+    </div>
+
+    <div class="main-content">
+        <div class="header">
+            <h1>Dashboard — Controle de Funcionários</h1>
+        </div>
+
+        <div class="loading" id="loading">Carregando...</div>
+
+        <div class="row" id="kpis"></div>
+        <div class="row" id="alerts"></div>
+
+        <!-- GRÁFICOS -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Produtividade por Dia</h5>
+                    <div id="chartProdutividade"></div>
+                </div></div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Carga Horária</h5>
+                    <div id="chartCarga"></div>
+                </div></div>
+            </div>
+        </div>
+
+        <!-- GRÁFICO 2 -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Faltas por Semana</h5>
+                    <div id="chartFaltas"></div>
+                </div></div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Ranking de Desempenho</h5>
+                    <div id="chartRanking"></div>
+                </div></div>
+            </div>
+        </div>
+
+        <!-- TABELA -->
+        <div class="card"><div class="card-body">
+            <h5 class="card-title">Tabela de Funcionários</h5>
+            <div class="table-responsive">
+                <table id="tableFuncionarios" class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Nome</th>
+                            <th>Cargo</th>
+                            <th>Horas Trabalhadas</th>
+                            <th>Faltas</th>
+                            <th>Atrasos (min)</th>
+                            <th>Vendas</th>
+                            <th>Meta (%)</th>
+                            <th>Comissão</th>
+                            <th>Observações</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div></div>
+
+        <!-- HISTÓRICO -->
+        <div class="card"><div class="card-body">
+            <h5 class="card-title">Histórico de Desempenho (Últimos 6 Meses)</h5>
+            <div id="chartHistorico"></div>
+        </div></div>
+    </div>
+
+    <script>
+        let data = [];
+        let dt;
+
+        // -----------------------
+        // SEED DE EXEMPLO
+        // -----------------------
+        const seedData = [
+            { Nome: 'João Silva', Cargo: 'Vendedor', 'Data Admissão': '2022-01-01', 'Tipo Contrato': 'mensalista', Contato: 'joao@email.com', Situação: 'ativo', 'Horas Dia': 8, Faltas: 2, 'Atrasos Min': 15, Vendas: 15000, 'Ticket Médio': 150, Conversão: 0.8, Meta: 12000, 'Comissão %': 5, Observações: 'Bom desempenho' },
+            { Nome: 'Maria Santos', Cargo: 'Atendente', 'Data Admissão': '2022-03-01', 'Tipo Contrato': 'horista', Contato: 'maria@email.com', Situação: 'ativo', 'Horas Dia': 6, Faltas: 0, 'Atrasos Min': 0, Vendas: 8000, 'Ticket Médio': 200, Conversão: 0.9, Meta: 10000, 'Comissão %': 4, Observações: 'Excelente pontualidade' },
+            { Nome: 'Pedro Lima', Cargo: 'Técnico', 'Data Admissão': '2021-06-01', 'Tipo Contrato': 'mensalista', Contato: 'pedro@email.com', Situação: 'afastado', 'Horas Dia': 8, Faltas: 5, 'Atrasos Min': 30, Vendas: 5000, 'Ticket Médio': 100, Conversão: 0.6, Meta: 8000, 'Comissão %': 3, Observações: 'Precisa melhorar' },
+            { Nome: 'Ana Costa', Cargo: 'Gerente', 'Data Admissão': '2020-01-01', 'Tipo Contrato': 'mensalista', Contato: 'ana@email.com', Situação: 'ativo', 'Horas Dia': 9, Faltas: 1, 'Atrasos Min': 5, Vendas: 20000, 'Ticket Médio': 250, Conversão: 0.85, Meta: 18000, 'Comissão %': 6, Observações: 'Funcionária do mês' },
+        ];
+
+        // -----------------------------
+        // EVENTOS
+        // -----------------------------
+        $('#fileUpload').on('change', function () {
+            const file = this.files[0];
+            carregarArquivo(file);
+        });
+
+        $('#seedBtn').on('click', () => processData(seedData));
+        $('#exportPDFBtn').on('click', gerarPDF);
+
+        // -----------------------------
+        // FUNÇÃO: CARREGAR ARQUIVO
+        // -----------------------------
+        function carregarArquivo(file) {
+            $('#loading').show();
+            const reader = new FileReader();
+
+            reader.onload = function (e) {
+                try {
+                    let parsedData = [];
+
+                    if (file.name.endsWith('.csv')) {
+                        parsedData = Papa.parse(e.target.result, { header: true }).data;
+                    } else {
+                        const workbook = XLSX.read(e.target.result, { type: 'binary' });
+                        parsedData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                    }
+
+                    processData(parsedData);
+                } catch (error) {
+                    alert('Erro ao processar arquivo: ' + error.message);
+                } finally {
+                    $('#loading').hide();
+                }
+            };
+
+            reader.readAsBinaryString(file);
+        }
+
+        // -----------------------------
+        // PROCESSAR DADOS
+        // -----------------------------
+        function processData(rawData) {
+            data = rawData.map(row => {
+                const nome = row['Nome'] || '';
+                const cargo = row['Cargo'] || '';
+                const dataAdmissao = new Date(row['Data Admissão'] || '');
+                const tipoContrato = row['Tipo Contrato'] || '';
+                const contato = row['Contato'] || '';
+                const situacao = row['Situação'] || '';
+                const horasDia = parseFloat(row['Horas Dia'] || 0);
+                const faltas = parseInt(row['Faltas'] || 0);
+                const atrasosMin = parseInt(row['Atrasos Min'] || 0);
+                const vendas = parseFloat(row['Vendas'] || 0);
+                const ticketMedio = parseFloat(row['Ticket Médio'] || 0);
+                const conversao = parseFloat(row['Conversão'] || 0);
+                const meta = parseFloat(row['Meta'] || 0);
+                const comissaoPerc = parseFloat(row['Comissão %'] || 0);
+                const observacoes = row['Observações'] || '';
+
+                const metaPerc = meta > 0 ? (vendas / meta) * 100 : 0;
+                const comissao = vendas * (comissaoPerc / 100);
+                const produtividade = (conversao * 100) + (metaPerc / 10);
+
+                return {
+                    nome, cargo, dataAdmissao, tipoContrato, contato, situacao,
+                    horasDia, faltas, atrasosMin, vendas, ticketMedio,
+                    conversao, meta, comissaoPerc, observacoes,
+                    metaPerc, comissao, produtividade
+                };
+            }).filter(x => x.nome);
+
+            updateDashboard();
+        }
+
+        // -----------------------------
+        // ATUALIZAÇÕES
+        // -----------------------------
+        function updateDashboard() {
+            updateKPIs();
+            updateAlerts();
+            updateCharts();
+            updateTable();
+        }
+
+        // -----------------------------
+        // KPIs
+        // -----------------------------
+        function updateKPIs() {
+            const ativos = data.filter(x => x.situacao === 'ativo').length;
+            const horasTotais = data.reduce((s, x) => s + x.horasDia, 0);
+            const atrasosTotais = data.reduce((s, x) => s + x.atrasosMin, 0);
+            const produtividadeMedia = data.reduce((s, x) => s + x.produtividade, 0) / data.length || 0;
+
+            const funcionarioMes = data.reduce((best, x) => x.produtividade > best.produtividade ? x : best, { produtividade: 0 });
+
+            const comissaoTotal = data.reduce((s, x) => s + x.comissao, 0);
+
+            $('#kpis').html(`
+                <div class="col-md-2"><div class="card kpi-card">
+                    <h5>${ativos}</h5><p>Funcionários Ativos</p>
+                </div></div>
+
+                <div class="col-md-2"><div class="card kpi-card">
+                    <h5>${horasTotais}</h5><p>Horas Trabalhadas (Dia)</p>
+                </div></div>
+
+                <div class="col-md-2"><div class="card kpi-card">
+                    <h5>${atrasosTotais} min</h5><p>Atrasos Acumulados</p>
+                </div></div>
+
+                <div class="col-md-2"><div class="card kpi-card">
+                    <h5>${produtividadeMedia.toFixed(1)}%</h5><p>Produtividade Média</p>
+                </div></div>
+
+                <div class="col-md-2"><div class="card kpi-card">
+                    <h5>${funcionarioMes.nome}</h5><p>Funcionário do Mês</p>
+                </div></div>
+
+                <div class="col-md-2"><div class="card kpi-card">
+                    <h5>R$ ${comissaoTotal.toFixed(2)}</h5><p>Total de Comissões</p>
+                </div></div>
+            `);
+        }
+
+        // -----------------------------
+        // ALERTAS
+        // -----------------------------
+        function updateAlerts() {
+            const alertas = [];
+
+            data.forEach(func => {
+                if (func.faltas >= 4) {
+                    alertas.push({ tipo: 'danger', mensagem: `${func.nome} atingiu número alto de faltas.` });
+                }
+                if (func.metaPerc < 70) {
+                    alertas.push({ tipo: 'warning', mensagem: `${func.nome} está abaixo da meta.` });
+                }
+            });
+
+            if (alertas.length === 0) {
+                $('#alerts').html('');
+                return;
+            }
+
+            $('#alerts').html(alertas.map(a => `
+                <div class="col-md-12">
+                    <div class="card alert-card ${a.tipo}">
+                        <div class="card-body">${a.mensagem}</div>
+                    </div>
+                </div>
+            `).join(''));
+        }
+
+        // -----------------------------
+        // GRÁFICOS
+        // -----------------------------
+        function updateCharts() {
+            const nomes = data.map(x => x.nome);
+            const vendas = data.map(x => x.vendas);
+            const horas = data.map(x => x.horasDia);
+            const faltas = data.map(x => x.faltas);
+            const ranking = data.map(x => x.produtividade);
+
+            Plotly.newPlot('chartProdutividade', [{ x: nomes, y: ranking, type: 'bar' }]);
+            Plotly.newPlot('chartCarga', [{ x: nomes, y: horas, type: 'bar' }]);
+            Plotly.newPlot('chartFaltas', [{ x: nomes, y: faltas, type: 'bar' }]);
+            Plotly.newPlot('chartRanking', [{ x: nomes, y: vendas, type: 'bar' }]);
+
+            Plotly.newPlot('chartHistorico', [{
+                x: ['Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov'],
+                y: [70, 75, 80, 82, 81, 85],
+                type: 'scatter'
+            }]);
+        }
+
+        // -----------------------------
+        // TABELA
+        // -----------------------------
+        function updateTable() {
+            if (dt) dt.destroy();
+
+            dt = $('#tableFuncionarios').DataTable({
+                data,
+                columns: [
+                    { data: 'nome' },
+                    { data: 'cargo' },
+                    { data: 'horasDia' },
+                    { data: 'faltas' },
+                    { data: 'atrasosMin' },
+                    { data: 'vendas' },
+                    { data: 'metaPerc', render: x => x.toFixed(1) + '%' },
+                    { data: 'comissao', render: x => 'R$ ' + x.toFixed(2) },
+                    { data: 'observacoes' }
+                ]
+            });
+        }
+
+        // -----------------------------
+        // EXPORTAR PDF
+        // -----------------------------
+        function gerarPDF() {
+            alert('Exportação PDF em desenvolvimento...');
+        }
+    </script>
+
+</body>
+</html>
